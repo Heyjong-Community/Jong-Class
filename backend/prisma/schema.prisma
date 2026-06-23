@@ -1,0 +1,262 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique @db.VarChar(255)
+  username    String?  @unique @db.VarChar(255)
+  password    String?  @db.Text
+  fullname    String   @db.VarChar(255)
+  address     String   @db.Text
+  phoneNumber String   @db.VarChar(15)
+  city        String   @db.VarChar(255)
+  nationality String   @db.VarChar(255)
+  avatarUrl   String?  @db.Text
+  role        UserRole @default(USER)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  googleId     String? @unique @db.VarChar(255)
+  googleEmail  String? @unique @db.VarChar(255)
+  googleAvatar String? @db.Text
+
+  enrollments      Enrollment[]
+  certificates     Certificate[]
+  refreshTokens    RefreshToken[]
+  payments         Payment[]
+  voucherUsages    VoucherUsage[]
+  lessonProgresses LessonProgress[]
+  reviews          Review[]
+
+  @@index([email])
+  @@index([username])
+  @@index([role])
+}
+
+enum UserRole {
+  ADMIN
+  MENTOR
+  USER
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique @db.VarChar(255)
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Course {
+  id        String   @id @default(uuid())
+  title     String   @db.VarChar(255)
+  price     Int      @db.Integer
+  mentorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lessons      Lesson[]
+  quizzes      Quiz[]
+  enrollments  Enrollment[]
+  certificates Certificate[]
+  payments     Payment[]
+  reviews      Review[]
+
+  @@index([mentorId])
+  @@index([createdAt])
+  @@index([price])
+}
+
+model Lesson {
+  id        String   @id @default(uuid())
+  courseId  String
+  title     String   @db.VarChar(255)
+  youtubeId String   @db.Text
+  order     Int      @db.Integer // video order
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course           Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessonProgresses LessonProgress[]
+
+  @@unique([courseId, order])
+  @@index([courseId, order])
+}
+
+model Quiz {
+  id          String   @id @default(uuid())
+  courseId    String
+  question    String   @db.Text
+  option      String[] // multiple choice
+  answerIndex Int      @db.Integer // true answer
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+}
+
+model Enrollment {
+  id          String   @id @default(uuid())
+  userId      String
+  courseId    String
+  progress    Int      @default(0) @db.Integer
+  isCompleted Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId]) // Mencegah duplicate enrollment
+  @@index([userId])
+  @@index([courseId])
+  @@index([isCompleted])
+}
+
+model LessonProgress {
+  id        String    @id @default(uuid())
+  userId    String
+  lessonId  String
+  isWatched Boolean   @default(false)
+  watchedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+  @@index([isWatched])
+}
+
+model Certificate {
+  id            String   @id @default(uuid())
+  certificateId String   @unique @db.Text
+  userId        String
+  courseId      String
+  issuedAt      DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([courseId])
+  @@index([issuedAt])
+}
+
+model Voucher {
+  id             String    @id @default(uuid())
+  code           String    @unique
+  discountPct    Int       @default(100)
+  usageLimit     Int       @default(1)
+  allowedDomains String?
+  expiresAt      DateTime?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  voucherUsages VoucherUsage[]
+  payments      Payment[]
+
+  @@index([code])
+  @@index([expiresAt])
+  @@index([isActive])
+}
+
+model VoucherUsage {
+  id        String   @id @default(uuid())
+  voucherId String
+  userId    String
+  paymentId String?  @unique
+  usedAt    DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  // Relations
+  voucher Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@unique([voucherId, userId])
+  @@index([voucherId])
+  @@index([userId])
+  @@index([usedAt])
+}
+
+model Payment {
+  id          String        @id @default(uuid())
+  userId      String
+  courseId    String
+  voucherId   String?
+  amount      Int           @db.Integer
+  finalAmount Int           @db.Integer // Amount after discount
+  status      PaymentStatus @default(PENDING)
+  paymentUrl  String?       @db.Text
+  paymentId   String?       @unique @db.VarChar(255) // From payment gateway
+  paidAt      DateTime?
+  expiredAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course       Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  voucher      Voucher?      @relation(fields: [voucherId], references: [id])
+  voucherUsage VoucherUsage?
+
+  @@index([userId])
+  @@index([courseId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([paymentId])
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  userId    String
+  courseId  String
+  rating    Int      @db.Integer // 1-5
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId]) // Satu user hanya bisa review satu kali per course
+  @@index([userId])
+  @@index([courseId])
+  @@index([rating])
+}
