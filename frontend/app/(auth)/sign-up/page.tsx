@@ -7,7 +7,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'Sign Up', // Otomatis menjadi "Sign In | Jong Class"
+  title: 'Sign Up',
   description: 'Learning platform by Heyjong',
 };
 
@@ -80,7 +80,7 @@ export default function SignUpPage() {
         <div className='mt-6'>
           <p className='text-base text-primary text-center'>
             Sudah punya akun?{' '}
-            <Link href={`#`} className='text-secondary font-medium'>
+            <Link href={`/sign-in`} className='text-secondary font-medium'>
               Login sekarang
             </Link>
           </p>
