@@ -2,9 +2,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { fraunces } from '@/lib/fonts';
+import { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
-import React from 'react';
+
+export const metadata: Metadata = {
+  title: 'Sign Up', // Otomatis menjadi "Sign In | Jong Class"
+  description: 'Learning platform by Heyjong',
+};
 
 export default function SignUpPage() {
   return (

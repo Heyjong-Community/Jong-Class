@@ -4,7 +4,10 @@ import type { Metadata } from 'next';
 import '../globals.css';
 
 export const metadata: Metadata = {
-  title: 'Sign In | Jong Class',
+  title: {
+    default: 'Jong Class',
+    template: '%s | Jong Class',
+  },
   description: 'Learning platform by Heyjong',
 };
 
