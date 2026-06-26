@@ -1,4 +1,6 @@
+import ClassCard from '@/components/course/CourseCard';
 import { Button } from '@/components/ui/button';
+import { dummyCourses } from '@/helpers/data';
 import { fraunces } from '@/lib/fonts';
 import { CircleCheckBig } from 'lucide-react';
 import Image from 'next/image';
@@ -67,6 +69,18 @@ export default function Home() {
           <p className='mt-4 text-neutral text-base'>
             Deep-divce into technical specialities curated for the modern developer ecosystem.
           </p>
+        </div>
+        <div className='mt-16 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6'>
+          {dummyCourses.map((item) => (
+            <ClassCard
+              key={item.id}
+              id={item.id}
+              title={item.title}
+              price={item.price}
+              mentorId={item.instructor.name}
+              rating={item.rating}
+            />
+          ))}
         </div>
       </section>
     </div>
