@@ -3,25 +3,30 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { CreateAuthDto, LoginDto, RegisterDto } from './dto/create-auth.dto';
 import { UpdateAuthDto } from './dto/update-auth.dto';
 import { PrismaService } from 'src/prisma.service';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { UserRole } from 'src/generated/prisma/enums';
 
 @Injectable()
 export class AuthService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async register(dto: RegisterDto) {
-    // Check existing user
     const existingUser = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: dto.email }, { username: dto.username }],
       },
     });
 
-    // if existing user registered
     if (existingUser) {
       if (existingUser.email === dto.email) {
         throw new ConflictException('Email sudah terdaftar');
@@ -29,11 +34,8 @@ export class AuthService {
       throw new ConflictException('Username sudah terdaftar');
     }
 
-    // has password
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(dto.password, saltRounds);
+    const passwordHash = await bcrypt.hash(dto.password, 10);
 
-    // create new user
     const newUser = await this.prisma.user.create({
       data: {
         email: dto.email,
@@ -45,6 +47,7 @@ export class AuthService {
         city: dto.city,
         nationality: dto.nationality,
         avatarUrl: dto.avatarUrl || null,
+        role: UserRole.USER,
       },
       select: {
         id: true,
@@ -60,7 +63,6 @@ export class AuthService {
       },
     });
 
-    // return response
     return {
       message: 'Berhasil registrasi akun',
       data: newUser,
@@ -68,10 +70,21 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    // Check User
     const user = await this.prisma.user.findUnique({
-      where: {
-        email: dto.email,
+      where: { email: dto.email },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        fullname: true,
+        role: true,
+        password: true,
+        avatarUrl: true,
+        phoneNumber: true,
+        city: true,
+        nationality: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -85,44 +98,88 @@ export class AuthService {
       );
     }
 
-    // Validation Password
     const isPasswordValid = await bcrypt.compare(dto.password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Email atau password salah');
     }
 
-    // Generate Token
+    const tokens = await this.generateToken(user.id, user.email, user.role);
+    await this.saveRefreshToken(user.id, tokens.refreshToken);
 
-    // Set Refresh Token in http-only cookie
+    const { password: _password, ...safeUser } = user;
 
-    // Save Refresh Token to database
-
-    // Return user data + access token
     return {
       message: 'Login berhasil',
       data: {
-        user,
-        // accessToken: tokens,
+        user: safeUser,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
       },
     };
   }
 
-  async validateGoogleUser(googleProfile: any) {
-    const { id, emails, displayName, photos } = googleProfile;
-    const email = emails[0].value;
-    const name = displayName || email.split('@')[0];
-    const avatar = photos?.[0]?.value || null;
+  async validateLocalUser(email: string, password: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        fullname: true,
+        role: true,
+        password: true,
+        avatarUrl: true,
+        phoneNumber: true,
+        city: true,
+        nationality: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
 
-    // Find user
+    if (!user) {
+      throw new UnauthorizedException('Email atau password salah');
+    }
+
+    if (!user.password) {
+      throw new UnauthorizedException(
+        'Akun ini menggunakan Google Login. Silakan login dengan Google.',
+      );
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Email atau password salah');
+    }
+
+    const { password: _password, ...safeUser } = user;
+    return safeUser;
+  }
+
+  async validateGoogleUser(googleProfile: any) {
+    const googleId = googleProfile.googleId ?? googleProfile.id;
+    const email = googleProfile.email ?? googleProfile.emails?.[0]?.value;
+    const displayName =
+      googleProfile.fullname ??
+      googleProfile.displayName ??
+      googleProfile.name?.fullName ??
+      email?.split('@')[0] ??
+      'User';
+    const avatar =
+      googleProfile.avatarUrl ?? googleProfile.photos?.[0]?.value ?? null;
+
+    if (!googleId || !email) {
+      throw new ConflictException('Profil Google tidak valid');
+    }
+
     let user = await this.prisma.user.findUnique({
-      where: { googleId: id },
+      where: { googleId },
     });
 
     if (user) {
-      // Update avatar jika berubah
       if (avatar && user.googleAvatar !== avatar) {
         user = await this.prisma.user.update({
-          where: { googleId: id },
+          where: { googleId },
           data: {
             googleAvatar: avatar,
             avatarUrl: avatar,
@@ -133,33 +190,29 @@ export class AuthService {
       return user;
     }
 
-    // Find User By Email
     const existingUser = await this.prisma.user.findUnique({
       where: { email },
     });
 
     if (existingUser) {
-      // Link Google ke akun yang sudah ada
       if (!existingUser.googleId) {
         user = await this.prisma.user.update({
           where: { email },
           data: {
-            googleId: id,
+            googleId,
             googleEmail: email,
             googleAvatar: avatar,
             avatarUrl: avatar || existingUser.avatarUrl,
-            // Pertahankan data yang sudah ada
           },
         });
         return user;
-      } else {
-        throw new ConflictException(
-          'Email sudah terhubung dengan akun Google lain',
-        );
       }
+
+      throw new ConflictException(
+        'Email sudah terhubung dengan akun Google lain',
+      );
     }
 
-    // Create New User Fron Google
     let username = email.split('@')[0];
     let usernameExists = await this.prisma.user.findUnique({
       where: { username },
@@ -171,24 +224,23 @@ export class AuthService {
       usernameExists = await this.prisma.user.findUnique({
         where: { username },
       });
-      counter++;
+      counter += 1;
     }
 
     user = await this.prisma.user.create({
       data: {
         email,
         username,
-        fullname: name,
-        googleId: id,
+        fullname: displayName,
+        googleId,
         googleEmail: email,
         googleAvatar: avatar,
         avatarUrl: avatar,
-        // Required fields dengan default values
-        address: 'TBD', // User harus update nanti
+        address: 'TBD',
         phoneNumber: 'TBD',
         city: 'TBD',
         nationality: 'TBD',
-        password: null, // Tidak ada password
+        password: null,
         role: UserRole.USER,
       },
     });
@@ -196,7 +248,19 @@ export class AuthService {
     return user;
   }
 
-  async googleLogin() {}
+  async googleLogin(user: any) {
+    const tokens = await this.generateToken(user.id, user.email, user.role);
+    await this.saveRefreshToken(user.id, tokens.refreshToken);
+
+    return {
+      message: 'Login Google berhasil',
+      data: {
+        user,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      },
+    };
+  }
 
   async generateToken(userId: string, email: string, role: UserRole) {
     const payload = {
@@ -205,14 +269,25 @@ export class AuthService {
       role,
     };
 
+    const accessSecret =
+      this.configService.get<string>('JWT_ACCESS_SECRET') ??
+      'dev-access-secret';
+    const refreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET') ??
+      'dev-refresh-secret';
+    const accessExpiresIn =
+      this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') ?? '15m';
+    const refreshExpiresIn =
+      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d';
+
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payload, {
-        secret: this.configService.get('JWT_ACCESS_SECRET'),
-        expiresIn: this.configService.get('JWT_ACCESS_EXPIRES_IN') || '15m',
+      this.jwtService.signAsync(payload as Record<string, unknown>, {
+        secret: accessSecret,
+        expiresIn: accessExpiresIn as any,
       }),
-      this.jwtService.signAsync(payload, {
-        secret: this.configService.get('JWT_REFRESH_SECRET'),
-        expiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN') || '7d',
+      this.jwtService.signAsync(payload as Record<string, unknown>, {
+        secret: refreshSecret,
+        expiresIn: refreshExpiresIn as any,
       }),
     ]);
 
@@ -225,7 +300,6 @@ export class AuthService {
       .update(refreshToken)
       .digest('hex');
 
-    // Hapus refresh token lama (jika ada)
     await this.prisma.refreshToken.deleteMany({
       where: {
         userId,
@@ -233,47 +307,101 @@ export class AuthService {
       },
     });
 
-    // Simpan refresh token baru
     await this.prisma.refreshToken.create({
       data: {
         tokenHash,
         userId,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       },
     });
   }
 
-  async refreshToken(refreshToken: string) {}
+  async refreshToken(refreshToken: string) {
+    try {
+      const payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret:
+          this.configService.get<string>('JWT_REFRESH_SECRET') ??
+          'dev-refresh-secret',
+      });
 
-  async logout(userId: string) {}
+      const storedToken = await this.prisma.refreshToken.findFirst({
+        where: {
+          userId: payload.sub,
+          expiresAt: { gt: new Date() },
+          revokedAt: null,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
 
-  private setRefreshTokenCookie() {}
+      if (!storedToken) {
+        throw new UnauthorizedException('Refresh token tidak valid');
+      }
 
-  private clearRefreshTokenCookie() {}
+      const tokenHash = crypto
+        .createHash('sha256')
+        .update(refreshToken)
+        .digest('hex');
+      if (storedToken.tokenHash !== tokenHash) {
+        throw new UnauthorizedException('Refresh token tidak valid');
+      }
 
-  async validateUser(userId: string) {}
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+      });
 
-  async getUserFromGoogleId(googleId: string) {}
+      if (!user) {
+        throw new UnauthorizedException('User tidak ditemukan');
+      }
 
-  async linkGoogleAccount(userId: string, googleId: string) {}
+      await this.prisma.refreshToken
+        .delete({ where: { id: storedToken.id } })
+        .catch(() => undefined);
 
-  create(createAuthDto: CreateAuthDto) {
-    return 'This action adds a new auth';
+      const tokens = await this.generateToken(user.id, user.email, user.role);
+      await this.saveRefreshToken(user.id, tokens.refreshToken);
+
+      return {
+        message: 'Refresh token berhasil',
+        data: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+        },
+      };
+    } catch (error) {
+      throw new UnauthorizedException('Refresh token tidak valid');
+    }
   }
 
-  findAll() {
-    return `This action returns all auth`;
+  async logout(userId: string) {
+    await this.prisma.refreshToken.deleteMany({ where: { userId } });
+
+    return {
+      message: 'Logout berhasil',
+    };
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} auth`;
+  async validateUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User tidak ditemukan');
+    }
+
+    return user;
   }
 
-  update(id: number, updateAuthDto: UpdateAuthDto) {
-    return `This action updates a #${id} auth`;
+  async getUserFromGoogleId(googleId: string) {
+    return this.prisma.user.findUnique({ where: { googleId } });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} auth`;
+  async linkGoogleAccount(userId: string, googleId: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        googleId,
+      },
+    });
   }
 }
